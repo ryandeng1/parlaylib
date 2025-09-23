@@ -106,7 +106,8 @@ auto reduce(Range&& v, BinaryOperator&& f, T identity) {
     return result;
   });
   return parlay::internal::reduce(make_slice(block_sums),
-            parlay::make_monoid(std::forward<BinaryOperator>(f), std::move(identity)));
+            // parlay::make_monoid(std::forward<BinaryOperator>(f), std::move(identity)));
+            parlay::binary_op(std::forward<BinaryOperator>(f), std::move(identity)));
 }
 
 template<typename Range, typename Monoid,

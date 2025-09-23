@@ -62,7 +62,8 @@ void seq_radix_sort_(slice<InIterator, InIterator> In,
       auto get_key = [&](size_t i) -> size_t {
         return (g(Out[i]) >> bit_offset) & mask;
       };
-      seq_count_sort_<uninitialized_relocate_tag>(Out, In, delayed_seq<size_t>(n, get_key), counts, num_buckets);
+      // seq_count_sort_<uninitialized_relocate_tag>(Out, In, delayed_seq<size_t>(n, get_key), counts, num_buckets);
+      seq_count_sort_<uninitialized_relocate_tag>(Out, In, delayed_tabulate<size_t>(n, get_key), counts, num_buckets);
     }
     
     else {
@@ -70,7 +71,8 @@ void seq_radix_sort_(slice<InIterator, InIterator> In,
         return (g(In[i]) >> bit_offset) & mask;
       };
 
-      seq_count_sort_<uninitialized_relocate_tag>(In, Out, delayed_seq<size_t>(n, get_key), counts, num_buckets);
+      // seq_count_sort_<uninitialized_relocate_tag>(In, Out, delayed_seq<size_t>(n, get_key), counts, num_buckets);
+      seq_count_sort_<uninitialized_relocate_tag>(In, Out, delayed_tabulate<size_t>(n, get_key), counts, num_buckets);
       
     }
                     

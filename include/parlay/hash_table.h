@@ -226,7 +226,8 @@ class hashtable {
   // returns the number of entries
   size_t count() {
     auto is_full = [&](size_t i) -> size_t { return (TA[i] == empty) ? 0 : 1; };
-    return internal::reduce(delayed_seq<size_t>(m, is_full), addm<size_t>());
+    // return internal::reduce(delayed_seq<size_t>(m, is_full), addm<size_t>());
+    return internal::reduce(delayed_seq<size_t>(m, is_full), plus<size_t>());
   }
 
   // returns all the current entries compacted into a sequence
@@ -260,7 +261,8 @@ class hashtable {
         return 0;
     };
     auto x = sequence<index>::from_function(m, is_full);
-    internal::scan_inplace(make_slice(x), addm<index>());
+    // internal::scan_inplace(make_slice(x), addm<index>());
+    internal::scan_inplace(make_slice(x), plus<index>());
     return x;
   }
 

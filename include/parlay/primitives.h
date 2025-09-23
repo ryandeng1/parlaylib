@@ -98,12 +98,12 @@ auto reduce(R&& r, Monoid&& m) {
   return internal::reduce(make_slice(r), std::forward<Monoid>(m));
 }
 
-template<typename R, typename LegacyMonoid,
-    std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
-auto reduce(R&& r, LegacyMonoid m) {
-  static_assert(is_random_access_range_v<R>);
-  return parlay::reduce(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
-}
+// template<typename R, typename LegacyMonoid,
+//     std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
+// auto reduce(R&& r, LegacyMonoid m) {
+//   static_assert(is_random_access_range_v<R>);
+//   return parlay::reduce(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
+// }
 
 // Compute the sum of the elements of r
 template<typename R>
@@ -146,12 +146,12 @@ auto scan(R&& r, Monoid&& m) {
   return internal::scan(make_slice(r), std::forward<Monoid>(m));
 }
 
-template<typename R, typename LegacyMonoid,
-         std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
-auto scan(R&& r, LegacyMonoid m) {
-  static_assert(is_random_access_range_v<R>);
-  return parlay::scan(make_slice(r), legacy_monoid_adapter(std::move(m)));
-}
+// template<typename R, typename LegacyMonoid,
+//          std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
+// auto scan(R&& r, LegacyMonoid m) {
+//   static_assert(is_random_access_range_v<R>);
+//   return parlay::scan(make_slice(r), legacy_monoid_adapter(std::move(m)));
+// }
 
 template<typename R, typename Monoid,
          std::enable_if_t<is_monoid_v<Monoid>, int> = 0>
@@ -161,12 +161,12 @@ auto scan_inclusive(R&& r, Monoid&& m) {
   return internal::scan(make_slice(r), std::forward<Monoid>(m), internal::fl_scan_inclusive).first;
 }
 
-template<typename R, typename LegacyMonoid,
-         std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
-auto scan_inclusive(R&& r, LegacyMonoid m) {
-  static_assert(is_random_access_range_v<R>);
-  return parlay::scan_inclusive(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
-}
+// template<typename R, typename LegacyMonoid,
+//          std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
+// auto scan_inclusive(R&& r, LegacyMonoid m) {
+//   static_assert(is_random_access_range_v<R>);
+//   return parlay::scan_inclusive(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
+// }
 
 template<typename R, typename Monoid,
          std::enable_if_t<is_monoid_v<Monoid>, int> = 0>
@@ -176,12 +176,12 @@ auto scan_inplace(R&& r, Monoid&& m) {
   return internal::scan_inplace(make_slice(r), std::forward<Monoid>(m));
 }
 
-template<typename R, typename LegacyMonoid,
-         std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
-auto scan_inplace(R&& r, LegacyMonoid m) {
-  static_assert(is_random_access_range_v<R>);
-  return parlay::scan_inplace(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
-}
+// template<typename R, typename LegacyMonoid,
+//          std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
+// auto scan_inplace(R&& r, LegacyMonoid m) {
+//   static_assert(is_random_access_range_v<R>);
+//   return parlay::scan_inplace(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
+// }
 
 template<typename R, typename Monoid,
          std::enable_if_t<is_monoid_v<Monoid>, int> = 0>
@@ -191,12 +191,12 @@ auto scan_inclusive_inplace(R&& r, Monoid&& m) {
   return internal::scan_inplace(make_slice(r), std::forward<Monoid>(m), internal::fl_scan_inclusive);
 }
 
-template<typename R, typename LegacyMonoid,
-         std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
-auto scan_inclusive_inplace(R&& r, LegacyMonoid m) {
-  static_assert(is_random_access_range_v<R>);
-  return parlay::scan_inclusive_inplace(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
-}
+// template<typename R, typename LegacyMonoid,
+//          std::enable_if_t<!is_monoid_v<LegacyMonoid> && is_legacy_monoid_v<LegacyMonoid>, int> = 0>
+// auto scan_inclusive_inplace(R&& r, LegacyMonoid m) {
+//   static_assert(is_random_access_range_v<R>);
+//   return parlay::scan_inclusive_inplace(std::forward<R>(r), legacy_monoid_adapter(std::move(m)));
+// }
 
 /* ----------------------- Pack ----------------------- */
 
@@ -810,7 +810,8 @@ auto min_element(R&& r, Compare&& comp) {
     { return (!comp(it[r], it[l]) ? l : r); };
   // Note: I think this original ParlayLib code had a bad definition for this monoid's identity.
   // return std::begin(r) + internal::reduce(make_slice(SS), make_monoid(f, (size_t)parlay::size(r)));
-  return std::begin(r) + internal::reduce(make_slice(SS), make_monoid(f, (size_t)0));
+  // return std::begin(r) + internal::reduce(make_slice(SS), make_monoid(f, (size_t)0));
+  return std::begin(r) + internal::reduce(make_slice(SS), binary_op(f, (size_t)0));
 }
 
 template <typename R>
@@ -849,7 +850,8 @@ auto minmax_element(R&& r, Compare&& comp) {
   };
   // Note: I think this original ParlayLib code had a bad definition for this monoid's identity.
   // auto ds = internal::reduce(make_slice(SS), make_monoid(f, std::make_pair(n, n)));
-  auto ds = internal::reduce(make_slice(SS), make_monoid(f, std::make_pair(0, 0)));
+  // auto ds = internal::reduce(make_slice(SS), make_monoid(f, std::make_pair(0, 0)));
+  auto ds = internal::reduce(make_slice(SS), binary_op(f, std::make_pair(0, 0)));
   return std::make_pair(std::begin(r) + ds.first, std::begin(r) + ds.second);
 }
 
@@ -904,7 +906,8 @@ bool is_sorted(R&& r, Compare&& comp) {
   if (parlay::size(r) == 0) return true;
   auto B = delayed_seq<bool>(parlay::size(r) - 1, [&comp, it = std::begin(r)](size_t i)
       { return comp(it[i + 1], it[i]); });
-  return (internal::reduce(make_slice(B), parlay::make_monoid(std::logical_or<>(), false)) == 0);
+  // return (internal::reduce(make_slice(B), parlay::make_monoid(std::logical_or<>(), false)) == 0);
+  return (internal::reduce(make_slice(B), parlay::binary_op(std::logical_or<>(), false)) == 0);
 }
 
 template <typename R>

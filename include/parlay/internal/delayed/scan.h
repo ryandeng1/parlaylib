@@ -58,7 +58,8 @@ struct block_delayed_scan_t :
         }
         return result;
       });
-      total = parlay::internal::scan_inplace(make_slice(block_sums), parlay::make_monoid(*(op.get()), identity));
+      // total = parlay::internal::scan_inplace(make_slice(block_sums), parlay::make_monoid(*(op.get()), identity));
+      total = parlay::internal::scan_inplace(make_slice(block_sums), parlay::binary_op(*(op.get()), identity));
     }
     else {
       block_sums = sequence<T>(1, identity);

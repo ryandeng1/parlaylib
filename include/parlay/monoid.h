@@ -227,6 +227,7 @@ monoid<F, T> binary_op(F f, T id) {
 // e.g., parlay::reduce and parlay::scan, but all new library functions will only support
 // the new monoids. This ensures backward compatibility, but encourages the use of the
 // new ones for new code.
+/*
 template<typename Monoid_, typename = void>
 struct is_legacy_monoid : public std::false_type {};
 
@@ -355,6 +356,7 @@ struct minmaxm {
     return T((std::min)(a.first, b.first), (std::max)(a.second, b.second));
   }
 };
+*/
 
 
 }  // namespace parlay

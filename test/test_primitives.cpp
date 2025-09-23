@@ -73,7 +73,8 @@ TEST(TestPrimitives, TestReduceMax) {
   auto s = parlay::tabulate(100000, [](long long i) -> long long {
     return (50021 * i + 61) % (1 << 20);
   });
-  auto maxval = parlay::reduce(s, parlay::maxm<long long>());
+  // auto maxval = parlay::reduce(s, parlay::maxm<long long>());
+  auto maxval = parlay::reduce(s, parlay::maximum<long long>());
   ASSERT_EQ(maxval, *std::max_element(std::begin(s), std::end(s)));
 }
 
@@ -131,9 +132,11 @@ TEST(TestPrimitives, TestScanMax) {
   auto s = parlay::tabulate(100000, [](long long i) -> long long {
     return (50021 * i + 61) % (1 << 20);
   });
-  auto [scanz, total] = parlay::scan(s, parlay::maxm<long long>());
+  // auto [scanz, total] = parlay::scan(s, parlay::maxm<long long>());
+  auto [scanz, total] = parlay::scan(s, parlay::maximum<long long>());
   auto psums = parlay::sequence<long long>(100000);
-  psums[0] = parlay::maxm<long long>().identity;
+  // psums[0] = parlay::maxm<long long>().identity;
+  psums[0] = parlay::maximum<long long>().identity;
   std::partial_sum(std::begin(s), std::end(s)-1, std::begin(psums)+1, TakeMax<long long>());
   ASSERT_EQ(scanz, psums);
   ASSERT_EQ(total, std::accumulate(std::begin(s), std::end(s), 0LL, TakeMax<long long>()));
@@ -143,7 +146,8 @@ TEST(TestPrimitives, TestScanInclusiveMax) {
   auto s = parlay::tabulate(100000, [](long long i) -> long long {
     return (50021 * i + 61) % (1 << 20);
   });
-  auto scanz = parlay::scan_inclusive(s, parlay::maxm<long long>());
+  // auto scanz = parlay::scan_inclusive(s, parlay::maxm<long long>());
+  auto scanz = parlay::scan_inclusive(s, parlay::maximum<long long>());
   auto psums = parlay::sequence<long long>(100000);
   std::partial_sum(std::begin(s), std::end(s), std::begin(psums), TakeMax<long long>());
   ASSERT_EQ(scanz, psums);
@@ -155,9 +159,11 @@ TEST(TestPrimitives, TestScanInplaceMax) {
   });
   auto sum = std::accumulate(std::begin(s), std::end(s), 0LL, TakeMax<long long>());
   auto psums = parlay::sequence<long long>(100000);
-  psums[0] = parlay::maxm<long long>().identity;
+  // psums[0] = parlay::maxm<long long>().identity;
+  psums[0] = parlay::maximum<long long>().identity;
   std::partial_sum(std::begin(s), std::end(s)-1, std::begin(psums)+1, TakeMax<long long>());
-  auto total = parlay::scan_inplace(s, parlay::maxm<long long>());
+  // auto total = parlay::scan_inplace(s, parlay::maxm<long long>());
+  auto total = parlay::scan_inplace(s, parlay::maximum<long long>());
   ASSERT_EQ(s, psums);
   ASSERT_EQ(total, sum);
 }
@@ -169,7 +175,8 @@ TEST(TestPrimitives, TestScanInclusiveInplaceMax) {
   auto sum = std::accumulate(std::begin(s), std::end(s), 0LL, TakeMax<long long>());
   auto psums = parlay::sequence<long long>(100000);
   std::partial_sum(std::begin(s), std::end(s), std::begin(psums), TakeMax<long long>());
-  auto total = parlay::scan_inclusive_inplace(s, parlay::maxm<long long>());
+  // auto total = parlay::scan_inclusive_inplace(s, parlay::maxm<long long>());
+  auto total = parlay::scan_inclusive_inplace(s, parlay::maximum<long long>());
   ASSERT_EQ(s, psums);
   ASSERT_EQ(total, sum);
 }

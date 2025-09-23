@@ -220,7 +220,9 @@ auto reduce(Seq const &A, Monoid&& m, flags fl = no_flag) {
                                            }};
   T cilk_reducer(_Monoid) r = m.identity;
 
-  cilk_for (const auto &x : A) {
+  // cilk_for (const auto &x : A) {
+  cilk_for (int i = 0; i < n; i++) {
+    const auto& x = A[i];
     // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
     r = m(std::move(*&r), x);
   }
@@ -417,7 +419,8 @@ auto filter_map(In_Seq const &In, F&& f, G&& g) {
   using outT = std::invoke_result_t<G, range_reference_type_t<In_Seq>>;
   size_t n = In.size();
   size_t l = num_blocks(n, _block_size);
-  auto in_mapped = delayed_seq<outT>(n, [&] (size_t i) { return g(In[i]); });
+  // auto in_mapped = delayed_seq<outT>(n, [&] (size_t i) { return g(In[i]); });
+  auto in_mapped = delayed_tabulate<outT>(n, [&] (size_t i) { return g(In[i]); });
 
   sequence<size_t> Sums(l);
   sequence<bool> Fl(n);
