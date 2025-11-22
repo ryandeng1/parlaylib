@@ -294,7 +294,7 @@ auto reduce(Seq const &A, Monoid&& m, flags fl = no_flag) {
   T cilk_reducer(_Monoid) r = m.identity;
 
   if constexpr (is_parlay_sequence_v<Seq>) {
-    T *begin = A.begin();
+    auto *begin = A.begin();
     [[tapir::target("cuda")]] cilk_for (size_t i = 0; i < n; i++) {
       const auto& x = begin[i];
       // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
@@ -350,58 +350,6 @@ auto scan_serial(In_Seq const &In, Out_Seq Out, Monoid&& m,
   return r;
 }
 
-/*
-namespace scan_detail {
-
-template <typename Out_Range>
-struct reducer_context {
-  using scanner_t = scanner<Out_Range>;
-  using IdFnTy = typename scanner_t::IdFnTy;
-  using ReduceFnTy = typename scanner_t::ReduceFnTy;
-  Out_Range *out;
-  IdFnTy *value_id;
-  ReduceFnTy *value_reduce;
-  bool inclusive;
-};
-
-template <typename Out_Range>
-inline __attribute__((always_inline))
-auto make_identity_lambda(reducer_context<Out_Range> ctx) {
-  using scanner_t = scanner<Out_Range>;
-  return __cilk_make_manual_lambda_id(
-      [ctx](void *v) {
-        auto *sr = new (v) scanner_t(*ctx.out, *ctx.value_id, *ctx.value_reduce, ctx.inclusive);
-        sr->r.start = -1;
-        sr->r.end = -1;
-        sr->is_leftmost = false;
-      });
-}
-
-template <typename Out_Range>
-inline __attribute__((always_inline))
-auto make_reduce_lambda() {
-  using scanner_t = scanner<Out_Range>;
-  return __cilk_make_manual_lambda_reduce(
-      [](void *lhs, void *rhs) {
-        auto *lsr = static_cast<scanner_t *>(lhs);
-        auto *rsr = static_cast<scanner_t *>(rhs);
-        if (lsr->is_leftmost) {
-          rsr->down_sweep(lsr->sum);
-        } else {
-          auto *l_node = new scanner_t(*lsr);
-          auto *r_node = new scanner_t(*rsr);
-          lsr->l_child = l_node;
-          lsr->r_child = r_node;
-        }
-        lsr->r.end = rsr->r.end;
-        lsr->sum = lsr->value_reduce.invoke_reduce(
-            lsr->value_reduce.ctx, &lsr->sum, &rsr->sum);
-      });
-}
-
-}  // namespace scan_detail
-*/
-
 template <typename In_Seq, typename Out_Range, class Monoid>
 auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_uninitialized=false) {
   static_assert(is_random_access_range_v<In_Seq>);
@@ -445,252 +393,167 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
     //   std::cout << "out not sequence type: " << typeid(Out_Range).name() << std::endl;
     // }
 
-    if constexpr (is_parlay_sequence_v<In_Seq> && is_parlay_sequence_v<Out_Range>) {
-      const T *in_ptr = In.begin();
-      T *out_ptr = Out.begin();
-      bool alias = (in_ptr == out_ptr);
-      T last_input = in_ptr[n - 1];
-
-      if (inclusive) {
-        if (out_uninitialized && !alias) {
-          for (size_t i = 0; i < n; i++) {
-            assign_uninitialized(out_ptr[i], in_ptr[i]);
-          }
+    const auto *in_ptr = [&]() {
+        if constexpr (is_parlay_sequence_v<In_Seq> ) {
+            return In.begin();      // Only compiled if T is int
         } else {
-          for (size_t i = 0; i < n; i++) {
-            out_ptr[i] = in_ptr[i];
-          }
+            return &In[0];     // Only compiled if T is not int
+        }
+    }();
+
+    T *out_ptr = [&]() {
+        if constexpr (is_parlay_sequence_v<Out_Range> ) {
+            return Out.begin();      // Only compiled if T is int
+        } else {
+            return &Out[0];     // Only compiled if T is not int
+        }
+    }();
+
+    // const T *in_ptr = get_in_ptr();
+    // T *out_ptr = get_out_ptr();
+    bool alias = (in_ptr == out_ptr);
+    T last_input = in_ptr[n - 1];
+
+    if (inclusive) {
+      if (out_uninitialized && !alias) {
+        for (size_t i = 0; i < n; i++) {
+          assign_uninitialized(out_ptr[i], in_ptr[i]);
         }
       } else {
-        if (alias) {
-          T first_input = in_ptr[0];
-          for (size_t i = n; i-- > 1;) {
+        for (size_t i = 0; i < n; i++) {
+          out_ptr[i] = in_ptr[i];
+        }
+      }
+    } else {
+      if (alias) {
+        T first_input = in_ptr[0];
+        for (size_t i = n; i-- > 1;) {
+          out_ptr[i] = in_ptr[i - 1];
+        }
+        out_ptr[0] = m.identity;
+        if (n > 1) out_ptr[1] = first_input;
+      } else {
+        if (out_uninitialized) {
+          assign_uninitialized(out_ptr[0], m.identity);
+          for (size_t i = 1; i < n; i++) {
+            assign_uninitialized(out_ptr[i], in_ptr[i - 1]);
+          }
+        } else {
+          out_ptr[0] = m.identity;
+          for (size_t i = 1; i < n; i++) {
             out_ptr[i] = in_ptr[i - 1];
           }
-          out_ptr[0] = m.identity;
-          if (n > 1) out_ptr[1] = first_input;
-        } else {
-          if (out_uninitialized) {
-            assign_uninitialized(out_ptr[0], m.identity);
-            for (size_t i = 1; i < n; i++) {
-              assign_uninitialized(out_ptr[i], in_ptr[i - 1]);
-            }
-          } else {
-            out_ptr[0] = m.identity;
-            for (size_t i = 1; i < n; i++) {
-              out_ptr[i] = in_ptr[i - 1];
-            }
-          }
         }
-      }
-
-      kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
-                                    reduce.invoke2, reduce.ctx);
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-        auto view = scanner.view(out_ptr, i);
-        *view = m(std::move(*view), out_ptr[i]);
-      }
-
-      T total = inclusive ? out_ptr[n - 1] : m(out_ptr[n - 1], last_input);
-      return total;
-      /*
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-        auto view = scanner.view(out_ptr, i);
-        *view = m(std::move(*view), in_ptr[i]);
-      }
-      T total = out_ptr[n - 1];
-
-      // For exclusive scan, the total should include the last element from input
-      if (!inclusive) {
-        total = m(std::move(total), In[n - 1]);
-      }
-
-      return total;
-      */
-
-      /*
-      if (out_uninitialized) {
-        if (inclusive) {
-          for (size_t i = 0; i < n; i++) {
-            assign_uninitialized(Out[i], In[i]);
-          }
-        } else {
-          assign_uninitialized(Out[0], m.identity);
-          for (size_t i = 1; i < n; i++) {
-            assign_uninitialized(Out[i], In[i - 1]);
-          }
-        }
-      } else {
-        if (inclusive) {
-          for (size_t i = 0; i < n; i++) {
-            Out[i] = In[i];
-          }
-        } else {
-          Out[0] = m.identity;
-          for (size_t i = 1; i < n; i++) {
-            Out[i] = In[i - 1];
-          }
-        }
-      }
-
-      T* out_ptr = Out.begin();
-
-      kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
-                                    reduce.invoke2, reduce.ctx);
-
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-        auto view = scanner.view(out_ptr, i);
-        *view = m(std::move(*view), out_ptr[i]);
-      }
-
-      T total = out_ptr[n - 1];
-
-      // For exclusive scan, the total should include the last element from input
-      if (!inclusive) {
-        total = m(std::move(total), In[n - 1]);
-      }
-
-      return total;
-      */
-    } else {
-      // T *in_ptr = &In[0];
-      // T *out_ptr = &Out[0];
-
-      // kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
-      //                               reduce.invoke2, reduce.ctx);
-      // if (inclusive) {
-      //   [[tapir::target("cuda")]]
-      //   cilk_for(size_t i = 0; i < n; ++i) {
-      //     auto view = scanner.view(out_ptr, i);
-      //     *view = m(std::move(*view), in_ptr[i]);
-      //   }
-      //   T total = out_ptr[n - 1];
-      //   return total;
-      // } else {
-      //   *out_ptr = m.identity;
-      //   [[tapir::target("cuda")]]
-      //   cilk_for(size_t i = 1; i < n; ++i) {
-      //     auto view = scanner.view(out_ptr, i);
-      //     *view = m(std::move(*view), in_ptr[i - 1]);
-      //   }
-      //   T total = m(out_ptr[n - 1], in_ptr[n - 1]);
-      //   return total;
-      // }
-
-      // Initialize seq_arr with input values for inclusive scan, or shifted values for exclusive scan
-      auto seq_arr = new T[n];
-      if (inclusive) {
-        for (size_t i = 0; i < n; i++) {
-          seq_arr[i] = In[i];
-        }
-      } else {
-        seq_arr[0] = m.identity;
-        for (size_t i = 1; i < n; i++) {
-          seq_arr[i] = In[i - 1];
-        }
-      }
-
-      kitcuda::scanner<T *> scanner(seq_arr, identity.invoke1, identity.ctx,
-                                    reduce.invoke2, reduce.ctx);
-
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-        auto view = scanner.view(seq_arr, i);
-        *view = m(std::move(*view), seq_arr[i]);
-      }
-
-      T total = seq_arr[n - 1];
-
-      // For exclusive scan, the total should include the last element from input
-      if (!inclusive) {
-        total = m(std::move(total), In[n - 1]);
-      }
-
-      // Copy the scanned results back to output
-      if (out_uninitialized) {
-        for (size_t i = 0; i < n; i++) {
-          assign_uninitialized(Out[i], seq_arr[i]);
-        }
-      } else {
-        for (size_t i = 0; i < n; i++) {
-          Out[i] = seq_arr[i];
-        }
-      }
-
-      delete[] seq_arr;
-      return total;
-    }
-  }
-
-
-  // auto sums = sequence<T>::uninitialized(l);
-  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
-  //   assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
-  // });
-  // T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
-  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
-  //   auto O = make_slice(Out).cut(s, e);
-  //   scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
-  // });
-  // return total;
-
-  /*
-    if (inclusive) {
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-      // for (size_t i = 0; i < n; ++i) {
-        auto view = scanner.view(seq_arr, i);
-        *view = m(std::move(*view), seq_arr[i]);
-      }
-    } else {
-      [[tapir::target("cuda")]]
-      cilk_for(size_t i = 0; i < n; ++i) {
-      // for (size_t i = 0; i < n; ++i) {
-        // T input = In[i];
-        auto t = seq_arr[i];
-        auto view = scanner.view(seq_arr, i);
-        *view = m(std::move(*view), t);
       }
     }
 
-    T total = seq_arr[n - 1];
-    // if (!inclusive) {
-    //   total = m(std::move(total), In[n - 1]);
-    // }
-
-    if (out_uninitialized) {
-      for (size_t i = 0; i < n; i++) {
-        assign_uninitialized(Out[i], seq_arr[i]);
-      }
-    } else {
-      for (size_t i = 0; i < n; i++) {
-        Out[i] = seq_arr[i];
-      }
+    kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
+                                  reduce.invoke2, reduce.ctx);
+    [[tapir::target("cuda")]]
+    cilk_for(size_t i = 0; i < n; ++i) {
+      auto view = scanner.view(out_ptr, i);
+      *view = m(std::move(*view), out_ptr[i]);
     }
 
-    delete[] seq_arr;
-
+    T total = inclusive ? out_ptr[n - 1] : m(out_ptr[n - 1], last_input);
     return total;
+
+    // if constexpr (is_parlay_sequence_v<In_Seq> && is_parlay_sequence_v<Out_Range>) {
+    //   // const T *in_ptr = In.begin();
+    //   // T *out_ptr = Out.begin();
+    //   bool alias = (in_ptr == out_ptr);
+    //   T last_input = in_ptr[n - 1];
+
+    //   if (inclusive) {
+    //     if (out_uninitialized && !alias) {
+    //       for (size_t i = 0; i < n; i++) {
+    //         assign_uninitialized(out_ptr[i], in_ptr[i]);
+    //       }
+    //     } else {
+    //       for (size_t i = 0; i < n; i++) {
+    //         out_ptr[i] = in_ptr[i];
+    //       }
+    //     }
+    //   } else {
+    //     if (alias) {
+    //       T first_input = in_ptr[0];
+    //       for (size_t i = n; i-- > 1;) {
+    //         out_ptr[i] = in_ptr[i - 1];
+    //       }
+    //       out_ptr[0] = m.identity;
+    //       if (n > 1) out_ptr[1] = first_input;
+    //     } else {
+    //       if (out_uninitialized) {
+    //         assign_uninitialized(out_ptr[0], m.identity);
+    //         for (size_t i = 1; i < n; i++) {
+    //           assign_uninitialized(out_ptr[i], in_ptr[i - 1]);
+    //         }
+    //       } else {
+    //         out_ptr[0] = m.identity;
+    //         for (size_t i = 1; i < n; i++) {
+    //           out_ptr[i] = in_ptr[i - 1];
+    //         }
+    //       }
+    //     }
+    //   }
+
+    //   kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
+    //                                 reduce.invoke2, reduce.ctx);
+    //   [[tapir::target("cuda")]]
+    //   cilk_for(size_t i = 0; i < n; ++i) {
+    //     auto view = scanner.view(out_ptr, i);
+    //     *view = m(std::move(*view), out_ptr[i]);
+    //   }
+
+    //   T total = inclusive ? out_ptr[n - 1] : m(out_ptr[n - 1], last_input);
+    //   return total;
+    // } else {
+    //   // Initialize seq_arr with input values for inclusive scan, or shifted values for exclusive scan
+    //   auto seq_arr = new T[n];
+    //   if (inclusive) {
+    //     for (size_t i = 0; i < n; i++) {
+    //       seq_arr[i] = In[i];
+    //     }
+    //   } else {
+    //     seq_arr[0] = m.identity;
+    //     for (size_t i = 1; i < n; i++) {
+    //       seq_arr[i] = In[i - 1];
+    //     }
+    //   }
+
+    //   kitcuda::scanner<T *> scanner(seq_arr, identity.invoke1, identity.ctx,
+    //                                 reduce.invoke2, reduce.ctx);
+
+    //   [[tapir::target("cuda")]]
+    //   cilk_for(size_t i = 0; i < n; ++i) {
+    //     auto view = scanner.view(seq_arr, i);
+    //     *view = m(std::move(*view), seq_arr[i]);
+    //   }
+
+    //   T total = seq_arr[n - 1];
+
+    //   // For exclusive scan, the total should include the last element from input
+    //   if (!inclusive) {
+    //     total = m(std::move(total), In[n - 1]);
+    //   }
+
+    //   // Copy the scanned results back to output
+    //   if (out_uninitialized) {
+    //     for (size_t i = 0; i < n; i++) {
+    //       assign_uninitialized(Out[i], seq_arr[i]);
+    //     }
+    //   } else {
+    //     for (size_t i = 0; i < n; i++) {
+    //       Out[i] = seq_arr[i];
+    //     }
+    //   }
+
+    //   delete[] seq_arr;
+    //   return total;
+    // }
   }
-  */
 
-  // auto sums = sequence<T>::uninitialized(l);
-  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
-  //   assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
-  // });
-  // T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
-  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
-  //   auto O = make_slice(Out).cut(s, e);
-  //   scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
-  // });
-
-  // return total;
-  
   /*
-
   std::function ident_fn = [=](void *v) { new (v) T(m.identity); };
   std::function reduce_fn = [=](T *l, T *r) { return m(*l, *r); };
 
