@@ -19,6 +19,49 @@
 #include "../slice.h"
 #include "../utilities.h"
 
+#include <cilk/reducer>
+
+template <class Fn>
+__cilk_manual_lambda __cilk_make_manual_lambda_id(Fn &&fn) {
+  using Stored = std::decay_t<Fn>;
+  // auto buffer = __kitcuda_mem_alloc_managed(sizeof(Stored));
+  // auto *ctx = new (buffer) Stored(std::forward<Fn>(fn));
+  auto *ctx = new Stored(std::forward<Fn>(fn));
+  // std::cout << "id sizeof stored: " << sizeof(Stored) << std::endl;
+  assert(ctx != nullptr && ctx != NULL);
+  return {
+    ctx,
+    +[](void *c, void *arg) {
+      (*static_cast<Stored*>(c))(arg);
+    },
+    nullptr,
+    +[](void *c) { 
+        delete static_cast<Stored*>(c);
+        // __kitcuda_mem_free(c);
+    }
+  };
+}
+
+template <class Fn>
+__cilk_manual_lambda __cilk_make_manual_lambda_reduce(Fn &&fn) {
+  using Stored = std::decay_t<Fn>;
+  // auto buffer = __kitcuda_mem_alloc_managed(sizeof(Stored));
+  // auto *ctx = new (buffer) Stored(std::forward<Fn>(fn));
+  auto *ctx = new Stored(std::forward<Fn>(fn));
+  assert(ctx != nullptr && ctx != NULL);
+  return {
+    ctx,
+    nullptr,
+    +[](void *c, void *lhs, void *rhs) {
+      (*static_cast<Stored*>(c))(lhs, rhs);
+    },
+    +[](void *c) { 
+        // __kitcuda_mem_free(c);
+        delete static_cast<Stored*>(c);
+    }
+  };
+}
+
 namespace parlay {
 namespace internal {
 
@@ -190,6 +233,27 @@ auto reduce_serial(Seq const &A, Monoid&& m) {
   return r;
 }
 
+// namespace parlay {
+// Base case: T is not a sequence
+template <typename T>
+struct is_parlay_sequence : std::false_type {};
+
+// Specialization: T is a parlay::sequence
+// We match the 3 template arguments defined in your file: T, Allocator, EnableSSO
+template <typename T, typename Alloc, bool SSO>
+struct is_parlay_sequence<parlay::sequence<T, Alloc, SSO>> : std::true_type {};
+
+// Specialization: T is a parlay::slice over contiguous iterators (pointer-like)
+template <typename It, typename S>
+struct is_parlay_sequence<parlay::slice<It, S>>
+    : std::bool_constant<std::is_pointer_v<std::remove_cv_t<It>>> {};
+
+// Helper variable template
+// We use std::decay_t to strip const/volatile and references (e.g., sequence& -> sequence)
+template <typename T>
+inline constexpr bool is_parlay_sequence_v = is_parlay_sequence<std::decay_t<T>>::value;
+// }
+
 template <typename Seq, typename Monoid>
 auto reduce(Seq const &A, Monoid&& m, flags fl = no_flag) {
   static_assert(is_random_access_range_v<Seq>);
@@ -203,6 +267,7 @@ auto reduce(Seq const &A, Monoid&& m, flags fl = no_flag) {
     return reduce_serial(A, m);
   }
 
+  
   // std::function ident_fn = [=](void *v) { new (v) T(m.identity); };
   // std::function reduce_fn = [=](void *l, void *r) {
   //   *static_cast<T *>(l) = m(*static_cast<T *>(l), *static_cast<T *>(r));
@@ -211,23 +276,42 @@ auto reduce(Seq const &A, Monoid&& m, flags fl = no_flag) {
 
   // T cilk_reducer(ident_fn, reduce_fn) r = m.identity;
 
-  const __reducer_callbacks _Monoid = {.size = sizeof(T),
-                                       .identity = [=](void *v) { new (v) T(m.identity); },
-                                       .reduce =
-                                           [=](void *l, void *r) {
-                                             *static_cast<T *>(l) = m(*static_cast<T *>(l), *static_cast<T *>(r));
-                                             if (std::is_destructible<T>::value) static_cast<T *>(r)->~T();
-                                           }};
+  auto identity = [=](void *v) { new (v) T(m.identity); };
+  auto reduce = [=](void *l, void *r) {
+    *static_cast<T *>(l) = m(*static_cast<T *>(l), *static_cast<T *>(r));
+    // if (std::is_destructible<T>::value) static_cast<T *>(r)->~T();
+  };
+
+  auto identity_ = __cilk_make_manual_lambda_id(identity);
+  auto reduce_ = __cilk_make_manual_lambda_reduce(reduce);
+
+  auto _Monoid = __reducer_callbacks{
+    sizeof(T),
+    identity_,
+    reduce_,
+  };
+
   T cilk_reducer(_Monoid) r = m.identity;
 
-  // cilk_for (const auto &x : A) {
-  cilk_for (int i = 0; i < n; i++) {
-    const auto& x = A[i];
+  if constexpr (is_parlay_sequence_v<Seq>) {
+    T *begin = A.begin();
+    [[tapir::target("cuda")]] cilk_for (size_t i = 0; i < n; i++) {
+      const auto& x = begin[i];
+      // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
+      r = m(std::move(*&r), x);
+    }
+
+    return *&r;
+  } else {
+    [[tapir::target("cuda")]] cilk_for (size_t i = 0; i < n; i++) {
+      const auto& x = A[i];
+      // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
+      r = m(std::move(*&r), x);
+    }
+
     // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
-    r = m(std::move(*&r), x);
+    return *&r;
   }
-  // NOTE: Need to explicitly convert the hyperobject back into a view here, to work around type-deduction issues.
-  return *&r;
 
   //// ORIGINAL PARLAYLIB CODE ////
   // auto sums = sequence<T>::uninitialized(l);
@@ -266,7 +350,408 @@ auto scan_serial(In_Seq const &In, Out_Seq Out, Monoid&& m,
   return r;
 }
 
+/*
+namespace scan_detail {
+
+template <typename Out_Range>
+struct reducer_context {
+  using scanner_t = scanner<Out_Range>;
+  using IdFnTy = typename scanner_t::IdFnTy;
+  using ReduceFnTy = typename scanner_t::ReduceFnTy;
+  Out_Range *out;
+  IdFnTy *value_id;
+  ReduceFnTy *value_reduce;
+  bool inclusive;
+};
+
+template <typename Out_Range>
+inline __attribute__((always_inline))
+auto make_identity_lambda(reducer_context<Out_Range> ctx) {
+  using scanner_t = scanner<Out_Range>;
+  return __cilk_make_manual_lambda_id(
+      [ctx](void *v) {
+        auto *sr = new (v) scanner_t(*ctx.out, *ctx.value_id, *ctx.value_reduce, ctx.inclusive);
+        sr->r.start = -1;
+        sr->r.end = -1;
+        sr->is_leftmost = false;
+      });
+}
+
+template <typename Out_Range>
+inline __attribute__((always_inline))
+auto make_reduce_lambda() {
+  using scanner_t = scanner<Out_Range>;
+  return __cilk_make_manual_lambda_reduce(
+      [](void *lhs, void *rhs) {
+        auto *lsr = static_cast<scanner_t *>(lhs);
+        auto *rsr = static_cast<scanner_t *>(rhs);
+        if (lsr->is_leftmost) {
+          rsr->down_sweep(lsr->sum);
+        } else {
+          auto *l_node = new scanner_t(*lsr);
+          auto *r_node = new scanner_t(*rsr);
+          lsr->l_child = l_node;
+          lsr->r_child = r_node;
+        }
+        lsr->r.end = rsr->r.end;
+        lsr->sum = lsr->value_reduce.invoke_reduce(
+            lsr->value_reduce.ctx, &lsr->sum, &rsr->sum);
+      });
+}
+
+}  // namespace scan_detail
+*/
+
+template <typename In_Seq, typename Out_Range, class Monoid>
+auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_uninitialized=false) {
+  static_assert(is_random_access_range_v<In_Seq>);
+  static_assert(is_monoid_for_v<Monoid, range_reference_type_t<In_Seq>>);
+  using T = monoid_value_type_t<Monoid>;
+  using V = details::elem_t<T *>;
+
+  size_t n = In.size();
+  size_t l = num_blocks(n, _block_size);
+
+  if (n == 0) {
+    return m.identity;
+  }
+
+  if (l <= 2 || fl & fl_sequential) {
+    return scan_serial(In, Out, m, m.identity, fl, out_uninitialized);
+  }
+
+  if constexpr (!std::is_trivially_copyable_v<V>) {
+    return scan_serial(In, Out, m, m.identity, fl, out_uninitialized);
+  } else {
+    auto identity = __cilk_make_manual_lambda_id([=](void *v) {
+      new (v) T(m.identity);
+    });
+
+    auto reduce = __cilk_make_manual_lambda_reduce([=](void *l, void *r) {
+      *static_cast<T *>(l) = m(*static_cast<T *>(l), *static_cast<T *>(r));
+    });
+
+    bool inclusive = fl & fl_scan_inclusive;
+
+    // if constexpr (is_parlay_sequence_v<In_Seq>) {
+    //   printf("in is sequence\n");
+    // } else {
+    //   std::cout << "in not sequence type: " << typeid(In_Seq).name() << std::endl;
+    // }
+
+    // if constexpr (is_parlay_sequence_v<Out_Range>) {
+    //   printf("out is sequence\n");
+    // } else {
+    //   std::cout << "out not sequence type: " << typeid(Out_Range).name() << std::endl;
+    // }
+
+    if constexpr (is_parlay_sequence_v<In_Seq> && is_parlay_sequence_v<Out_Range>) {
+      const T *in_ptr = In.begin();
+      T *out_ptr = Out.begin();
+      bool alias = (in_ptr == out_ptr);
+      T last_input = in_ptr[n - 1];
+
+      if (inclusive) {
+        if (out_uninitialized && !alias) {
+          for (size_t i = 0; i < n; i++) {
+            assign_uninitialized(out_ptr[i], in_ptr[i]);
+          }
+        } else {
+          for (size_t i = 0; i < n; i++) {
+            out_ptr[i] = in_ptr[i];
+          }
+        }
+      } else {
+        if (alias) {
+          T first_input = in_ptr[0];
+          for (size_t i = n; i-- > 1;) {
+            out_ptr[i] = in_ptr[i - 1];
+          }
+          out_ptr[0] = m.identity;
+          if (n > 1) out_ptr[1] = first_input;
+        } else {
+          if (out_uninitialized) {
+            assign_uninitialized(out_ptr[0], m.identity);
+            for (size_t i = 1; i < n; i++) {
+              assign_uninitialized(out_ptr[i], in_ptr[i - 1]);
+            }
+          } else {
+            out_ptr[0] = m.identity;
+            for (size_t i = 1; i < n; i++) {
+              out_ptr[i] = in_ptr[i - 1];
+            }
+          }
+        }
+      }
+
+      kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
+                                    reduce.invoke2, reduce.ctx);
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+        auto view = scanner.view(out_ptr, i);
+        *view = m(std::move(*view), out_ptr[i]);
+      }
+
+      T total = inclusive ? out_ptr[n - 1] : m(out_ptr[n - 1], last_input);
+      return total;
+      /*
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+        auto view = scanner.view(out_ptr, i);
+        *view = m(std::move(*view), in_ptr[i]);
+      }
+      T total = out_ptr[n - 1];
+
+      // For exclusive scan, the total should include the last element from input
+      if (!inclusive) {
+        total = m(std::move(total), In[n - 1]);
+      }
+
+      return total;
+      */
+
+      /*
+      if (out_uninitialized) {
+        if (inclusive) {
+          for (size_t i = 0; i < n; i++) {
+            assign_uninitialized(Out[i], In[i]);
+          }
+        } else {
+          assign_uninitialized(Out[0], m.identity);
+          for (size_t i = 1; i < n; i++) {
+            assign_uninitialized(Out[i], In[i - 1]);
+          }
+        }
+      } else {
+        if (inclusive) {
+          for (size_t i = 0; i < n; i++) {
+            Out[i] = In[i];
+          }
+        } else {
+          Out[0] = m.identity;
+          for (size_t i = 1; i < n; i++) {
+            Out[i] = In[i - 1];
+          }
+        }
+      }
+
+      T* out_ptr = Out.begin();
+
+      kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
+                                    reduce.invoke2, reduce.ctx);
+
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+        auto view = scanner.view(out_ptr, i);
+        *view = m(std::move(*view), out_ptr[i]);
+      }
+
+      T total = out_ptr[n - 1];
+
+      // For exclusive scan, the total should include the last element from input
+      if (!inclusive) {
+        total = m(std::move(total), In[n - 1]);
+      }
+
+      return total;
+      */
+    } else {
+      // T *in_ptr = &In[0];
+      // T *out_ptr = &Out[0];
+
+      // kitcuda::scanner<T *> scanner(out_ptr, identity.invoke1, identity.ctx,
+      //                               reduce.invoke2, reduce.ctx);
+      // if (inclusive) {
+      //   [[tapir::target("cuda")]]
+      //   cilk_for(size_t i = 0; i < n; ++i) {
+      //     auto view = scanner.view(out_ptr, i);
+      //     *view = m(std::move(*view), in_ptr[i]);
+      //   }
+      //   T total = out_ptr[n - 1];
+      //   return total;
+      // } else {
+      //   *out_ptr = m.identity;
+      //   [[tapir::target("cuda")]]
+      //   cilk_for(size_t i = 1; i < n; ++i) {
+      //     auto view = scanner.view(out_ptr, i);
+      //     *view = m(std::move(*view), in_ptr[i - 1]);
+      //   }
+      //   T total = m(out_ptr[n - 1], in_ptr[n - 1]);
+      //   return total;
+      // }
+
+      // Initialize seq_arr with input values for inclusive scan, or shifted values for exclusive scan
+      auto seq_arr = new T[n];
+      if (inclusive) {
+        for (size_t i = 0; i < n; i++) {
+          seq_arr[i] = In[i];
+        }
+      } else {
+        seq_arr[0] = m.identity;
+        for (size_t i = 1; i < n; i++) {
+          seq_arr[i] = In[i - 1];
+        }
+      }
+
+      kitcuda::scanner<T *> scanner(seq_arr, identity.invoke1, identity.ctx,
+                                    reduce.invoke2, reduce.ctx);
+
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+        auto view = scanner.view(seq_arr, i);
+        *view = m(std::move(*view), seq_arr[i]);
+      }
+
+      T total = seq_arr[n - 1];
+
+      // For exclusive scan, the total should include the last element from input
+      if (!inclusive) {
+        total = m(std::move(total), In[n - 1]);
+      }
+
+      // Copy the scanned results back to output
+      if (out_uninitialized) {
+        for (size_t i = 0; i < n; i++) {
+          assign_uninitialized(Out[i], seq_arr[i]);
+        }
+      } else {
+        for (size_t i = 0; i < n; i++) {
+          Out[i] = seq_arr[i];
+        }
+      }
+
+      delete[] seq_arr;
+      return total;
+    }
+  }
+
+
+  // auto sums = sequence<T>::uninitialized(l);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
+  // });
+  // T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   auto O = make_slice(Out).cut(s, e);
+  //   scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
+  // });
+  // return total;
+
+  /*
+    if (inclusive) {
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+      // for (size_t i = 0; i < n; ++i) {
+        auto view = scanner.view(seq_arr, i);
+        *view = m(std::move(*view), seq_arr[i]);
+      }
+    } else {
+      [[tapir::target("cuda")]]
+      cilk_for(size_t i = 0; i < n; ++i) {
+      // for (size_t i = 0; i < n; ++i) {
+        // T input = In[i];
+        auto t = seq_arr[i];
+        auto view = scanner.view(seq_arr, i);
+        *view = m(std::move(*view), t);
+      }
+    }
+
+    T total = seq_arr[n - 1];
+    // if (!inclusive) {
+    //   total = m(std::move(total), In[n - 1]);
+    // }
+
+    if (out_uninitialized) {
+      for (size_t i = 0; i < n; i++) {
+        assign_uninitialized(Out[i], seq_arr[i]);
+      }
+    } else {
+      for (size_t i = 0; i < n; i++) {
+        Out[i] = seq_arr[i];
+      }
+    }
+
+    delete[] seq_arr;
+
+    return total;
+  }
+  */
+
+  // auto sums = sequence<T>::uninitialized(l);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
+  // });
+  // T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   auto O = make_slice(Out).cut(s, e);
+  //   scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
+  // });
+
+  // return total;
   
+  /*
+
+  std::function ident_fn = [=](void *v) { new (v) T(m.identity); };
+  std::function reduce_fn = [=](T *l, T *r) { return m(*l, *r); };
+
+  auto identity = [=](void *v) { new (v) T(m.identity); };
+  auto reduce = [=](T *l, T *r) {
+    return m(*l, *r);
+  };
+
+  auto identity_ = __cilk_make_manual_lambda_id(identity);
+  auto reduce_ = __cilk_make_manual_lambda_reduce_scan<T>(reduce);
+
+  scanner<Out_Range> base(Out, identity_, reduce_, inclusive);
+
+  auto reducer_ctx = scan_detail::reducer_context<Out_Range>{
+      .out = &Out,
+      .value_id = &identity_,
+      .value_reduce = &reduce_,
+      .inclusive = inclusive};
+
+  const __reducer_callbacks _Monoid = {
+    .size = sizeof(scanner<Out_Range>),
+    .identity = scan_detail::make_identity_lambda<Out_Range>(reducer_ctx),
+    .reduce = scan_detail::make_reduce_lambda<Out_Range>()
+  };
+
+  scanner<Out_Range> cilk_reducer(_Monoid) scanner = base;
+
+  if (inclusive) {
+    [[tapir::target("cuda")]] 
+    cilk_for(size_t i = 0; i < n; ++i) {
+    // for(size_t i = 0; i < n; ++i) {
+      auto view = scanner.view(i);
+      *view = m(std::move(*&view), In[i]);
+    }
+  } else {
+    [[tapir::target("cuda")]] 
+    cilk_for(size_t i = 0; i < n; ++i) {
+    // for(size_t i = 0; i < n; ++i) {
+      T t = In[i];
+      auto view = scanner.view(i);
+      *view = m(std::move(*&view), t);
+    }
+  }
+  T total = scanner.sum;
+  */
+
+  // //// ORIGINAL PARLAYLIB CODE ////
+  // auto sums = sequence<T>::uninitialized(l);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
+  // });
+  // T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
+  // sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+  //   auto O = make_slice(Out).cut(s, e);
+  //   scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
+  // });
+
+  // return total;
+}
+
+/*
 template <typename In_Seq, typename Out_Range, class Monoid>
 auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_uninitialized=false) {
   static_assert(is_random_access_range_v<In_Seq>);
@@ -277,8 +762,10 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
   if (l <= 2 || fl & fl_sequential)
     return scan_serial(In, Out, m, m.identity, fl, out_uninitialized);
 
-  std::function ident_fn = [=](void *v) { new (v) T(m.identity); };
-  std::function reduce_fn = [=](T *l, T *r) { return m(*l, *r); };
+  // std::function ident_fn = [=](void *v) { new (v) T(m.identity); };
+  // std::function reduce_fn = [=](T *l, T *r) { return m(*l, *r); };
+  auto ident_fn = [=](void *v) { new (v) T(m.identity); };
+  auto reduce_fn = [=](T *l, T *r) { return m(*l, *r); };
   bool inclusive = fl & fl_scan_inclusive;
   // // FIXME: It's awkward that we need to separately create a non-reducer scanner object, so that the reducer object can
   // // refer to the object's identity and reduce methods.
@@ -286,16 +773,22 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
   // // scanner<Out_Range> cilk_reducer(base.identity, base.reduce) scanner = base;
   // const __reducer_callbacks _Monoid = {
   //     .size = sizeof(scanner<Out_Range>), .identity = base.identity, .reduce = base.reduce};
-  // scanner<Out_Range> cilk_reducer(_Monoid) scanner = base;
-  scanner<Out_Range> cilk_reducer scanner(Out, ident_fn, reduce_fn, inclusive);
+  // scanner<Out_Range> cilk_reducer(_Monoid) scanner = base.identity;
+  // scanner<Out_Range> cilk_reducer scanner(Out, ident_fn, reduce_fn, inclusive);
+  scanner<Out_Range> base(Out, ident_fn, reduce_fn, inclusive);
+  const __reducer_callbacks _Monoid = {
+      .size = sizeof(scanner<Out_Range>), .identity = __cilk_make_manual_lambda(ident_fn), .reduce = __cilk_make_manual_lambda(reduce_fn)};
+  scanner<Out_Range> cilk_reducer(_Monoid) scanner = base;
 
   if (inclusive) {
-    cilk_for(size_t i = 0; i < n; ++i) {
+    for(size_t i = 0; i < n; ++i) {
+    // for(size_t i = 0; i < n; ++i) {
       auto view = scanner.view(i);
       *view = m(std::move(*&view), In[i]);
     }
   } else {
-    cilk_for(size_t i = 0; i < n; ++i) {
+    for(size_t i = 0; i < n; ++i) {
+    // for(size_t i = 0; i < n; ++i) {
       T t = In[i];
       auto view = scanner.view(i);
       *view = m(std::move(*&view), t);
@@ -316,6 +809,30 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
 
   return total;
 }
+*/
+
+/*
+template <typename In_Seq, typename Out_Range, class Monoid>
+auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_uninitialized=false) {
+  static_assert(is_random_access_range_v<In_Seq>);
+  static_assert(is_monoid_for_v<Monoid, range_reference_type_t<In_Seq>>);
+  using T = monoid_value_type_t<Monoid>;
+  size_t n = In.size();
+  size_t l = num_blocks(n, _block_size);
+  if (l <= 2 || fl & fl_sequential)
+    return scan_serial(In, Out, m, m.identity, fl, out_uninitialized);
+  auto sums = sequence<T>::uninitialized(l);
+  sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+    assign_uninitialized(sums[i], reduce_serial(make_slice(In).cut(s, e), m));
+  });
+  T total = scan_serial(sums, make_slice(sums), m, m.identity, 0, false);
+  sliced_for(n, _block_size, [&](size_t i, size_t s, size_t e) {
+    auto O = make_slice(Out).cut(s, e);
+    scan_serial(make_slice(In).cut(s, e), O, m, sums[i], fl, out_uninitialized);
+  });
+  return total;
+}
+*/
 
 template <typename Iterator, typename Monoid>
 auto scan_inplace(slice<Iterator, Iterator> In, Monoid&& m, flags fl = no_flag) {
