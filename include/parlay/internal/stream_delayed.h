@@ -35,7 +35,17 @@ struct forward_delayed_sequence {
     iterator& operator++() {
       ++ii;
       count--;
-      return *this; }
+      return *this;
+    }
+      /*
+      if (count == 0) return *this;
+      // Decrement count first so the underlying iterator is not advanced
+      // past the final element (e.g., for flatten iterators).
+      --count;
+      if (count != 0) ++ii;
+      return *this;
+    }
+    */
     iterator operator++(int) {
       iterator tmp = *this;
       ++(*this);

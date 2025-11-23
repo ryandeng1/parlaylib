@@ -88,22 +88,24 @@ namespace parlay {
 // MSVC disables them with _HAS_EXCEPTIONS=0.  Might not cover obscure compilers/STLs.
 //
 // Exceptions can be explicitly disabled in Parlay with PARLAY_NO_EXCEPTIONS.
-#if !defined(PARLAY_NO_EXCEPTIONS) &&                            \
-    ((defined(__cpp_exceptions) && __cpp_exceptions != 0) ||     \
-     (defined(__EXCEPTIONS)) ||                                  \
-     (defined(_HAS_EXCEPTIONS) && _HAS_EXCEPTIONS == 1) ||       \
-     (defined(_MSC_VER) && !defined(_HAS_EXCEPTIONS)))
-#define PARLAY_EXCEPTIONS_ENABLED
-#endif
+// #if !defined(PARLAY_NO_EXCEPTIONS) &&                            \
+//     ((defined(__cpp_exceptions) && __cpp_exceptions != 0) ||     \
+//      (defined(__EXCEPTIONS)) ||                                  \
+//      (defined(_HAS_EXCEPTIONS) && _HAS_EXCEPTIONS == 1) ||       \
+//      (defined(_MSC_VER) && !defined(_HAS_EXCEPTIONS)))
+// #define PARLAY_EXCEPTIONS_ENABLED
+// #endif
 
 template<typename Exception, typename... Args>
 [[noreturn]] PARLAY_NOINLINE PARLAY_COLD void throw_exception_or_terminate(Args&&... args) {
-#if defined(PARLAY_EXCEPTIONS_ENABLED)
-  throw Exception{std::forward<Args>(args)...};
-#else
   std::cerr << Exception{std::forward<Args>(args)...}.what() << "\n";
   std::terminate();
-#endif
+// #if defined(PARLAY_EXCEPTIONS_ENABLED)
+//   throw Exception{std::forward<Args>(args)...};
+// #else
+//   std::cerr << Exception{std::forward<Args>(args)...}.what() << "\n";
+//   std::terminate();
+// #endif
 }
 
 

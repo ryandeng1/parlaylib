@@ -28,7 +28,8 @@ inline void par_do(Lf&& left, Rf&& right, bool) {
   static_assert(std::is_invocable_v<Lf&&>);
   static_assert(std::is_invocable_v<Rf&&>);
   cilk_scope {
-    cilk_spawn std::forward<Rf>(right)();
+    // cilk_spawn std::forward<Rf>(right)();
+    std::forward<Rf>(right)();
     std::forward<Lf>(left)();
   }
 }
@@ -36,6 +37,14 @@ inline void par_do(Lf&& left, Rf&& right, bool) {
 template <typename F>
 inline void parallel_for(size_t start, size_t end, F&& f, long granularity, bool) {
   static_assert(std::is_invocable_v<F&, size_t>);
+  // [[tapir::target("cuda")]]
+  // cilk_for (size_t i=start; i<end; i++) f(i);
+  // return;
+
+  for (size_t i=start; i<end; i++) f(i);
+  return;
+
+  /*
   if (granularity == 0)
     cilk_for (size_t i=start; i<end; i++) f(i);
   else if ((end - start) <= static_cast<size_t>(granularity))
@@ -48,6 +57,7 @@ inline void parallel_for(size_t start, size_t end, F&& f, long granularity, bool
       parallel_for(mid, end, f, granularity);
     }
   }
+  */
 }
 
 template <typename... Fs>

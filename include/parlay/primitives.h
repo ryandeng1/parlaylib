@@ -842,7 +842,8 @@ auto minmax_element(R&& r, Compare&& comp) {
   static_assert(std::is_invocable_r_v<bool, Compare, range_reference_type_t<R>, range_reference_type_t<R>>);
   size_t n = parlay::size(r);
   if (n == 0) return std::make_pair(std::begin(r), std::begin(r));
-  auto SS = delayed_seq<std::pair<size_t, size_t>>(parlay::size(r),
+  // auto SS = delayed_seq<std::pair<size_t, size_t>>(parlay::size(r),
+  auto SS = delayed_tabulate<std::pair<size_t, size_t>>(parlay::size(r),
     [&](size_t i) { return std::make_pair(i, i); });
   auto f = [&comp, it = std::begin(r)](const auto& l, const auto& r) {
     return (std::make_pair(!comp(it[r.first], it[l.first]) ? l.first : r.first,
