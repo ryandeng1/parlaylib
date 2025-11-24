@@ -350,7 +350,7 @@ auto scan_serial(In_Seq const &In, Out_Seq Out, Monoid&& m,
   return r;
 }
 
-template <typename In_Seq, typename Out_Range, class Monoid>
+template <bool Alias = false, typename In_Seq, typename Out_Range, class Monoid>
 auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_uninitialized=false) {
   static_assert(is_random_access_range_v<In_Seq>);
   static_assert(is_monoid_for_v<Monoid, range_reference_type_t<In_Seq>>);
@@ -381,37 +381,24 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
 
     bool inclusive = fl & fl_scan_inclusive;
 
-    // if constexpr (is_parlay_sequence_v<In_Seq>) {
-    //   printf("in is sequence\n");
-    // } else {
-    //   std::cout << "in not sequence type: " << typeid(In_Seq).name() << std::endl;
-    // }
-
-    // if constexpr (is_parlay_sequence_v<Out_Range>) {
-    //   printf("out is sequence\n");
-    // } else {
-    //   std::cout << "out not sequence type: " << typeid(Out_Range).name() << std::endl;
-    // }
-
-    const auto *in_ptr = [&]() {
+    const auto in_ptr = [&]() {
         if constexpr (is_parlay_sequence_v<In_Seq> ) {
             return In.begin();      // Only compiled if T is int
         } else {
-            return &In[0];     // Only compiled if T is not int
+            return In;     // Only compiled if T is not int
         }
     }();
 
-    T *out_ptr = [&]() {
+    auto out_ptr = [&]() {
         if constexpr (is_parlay_sequence_v<Out_Range> ) {
             return Out.begin();      // Only compiled if T is int
         } else {
-            return &Out[0];     // Only compiled if T is not int
+            return Out;     // Only compiled if T is not int
         }
     }();
 
-    // const T *in_ptr = get_in_ptr();
-    // T *out_ptr = get_out_ptr();
-    bool alias = (in_ptr == out_ptr);
+    // bool alias = (in_ptr == out_ptr);
+    bool alias = Alias;
     T last_input = in_ptr[n - 1];
 
     if (inclusive) {
@@ -700,7 +687,7 @@ auto scan_(In_Seq const &In, Out_Range Out, Monoid&& m, flags fl, bool out_unini
 template <typename Iterator, typename Monoid>
 auto scan_inplace(slice<Iterator, Iterator> In, Monoid&& m, flags fl = no_flag) {
   static_assert(is_monoid_for_v<Monoid, iterator_reference_type_t<Iterator>>);
-  return scan_(In, In, std::forward<Monoid>(m), fl);
+  return scan_<true>(In, In, std::forward<Monoid>(m), fl);
 }
 
 template <typename In_Seq, typename Monoid>
@@ -709,7 +696,7 @@ auto scan(In_Seq const &In, Monoid&& m, flags fl = no_flag) {
   static_assert(is_monoid_for_v<Monoid, range_reference_type_t<In_Seq>>);
   using T = monoid_value_type_t<Monoid>;
   auto Out = sequence<T>::uninitialized(In.size());
-  return std::make_pair(std::move(Out), scan_(In, make_slice(Out), std::forward<Monoid>(m), fl, true));
+  return std::make_pair(std::move(Out), scan_<false>(In, make_slice(Out), std::forward<Monoid>(m), fl, true));
 }
 
 // do in place if rvalue reference to a sequence<T>
@@ -718,7 +705,7 @@ template <typename T, typename Monoid,
 auto scan(sequence<T>&& In, Monoid&& m, flags fl = no_flag) {
   static_assert(is_monoid_v<Monoid>);
   sequence<T> Out = std::move(In);
-  T total = scan_(make_slice(Out), make_slice(Out), std::forward<Monoid>(m), fl);
+  T total = scan_<true>(make_slice(Out), make_slice(Out), std::forward<Monoid>(m), fl);
   return std::make_pair(std::move(Out), total);
 }
 
