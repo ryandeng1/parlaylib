@@ -240,7 +240,8 @@ sequence<size_t> integer_sort_r(slice<InIterator, InIterator> In,
   else if (key_bits <= base_bits) {
     size_t mask = (1 << key_bits) - 1;
     auto f = [&](size_t i) { return static_cast<size_t>(g(In[i]) & mask); };
-    auto get_bits = delayed_seq<size_t>(n, f);
+    // auto get_bits = delayed_seq<size_t>(n, f);
+    auto get_bits = delayed_tabulate<size_t>(n, f);
     size_t num_bkts = (num_buckets == 0) ? (size_t{1} << key_bits) : num_buckets;
     
     // only uses one bucket optimization (last argument) if inplace
@@ -267,7 +268,8 @@ sequence<size_t> integer_sort_r(slice<InIterator, InIterator> In,
     size_t num_inner_buckets = return_offsets ? ((size_t)1 << shift_bits) : 0;
     size_t mask = num_outer_buckets - 1;
     auto f = [&](size_t i) { return static_cast<size_t>((g(In[i]) >> shift_bits) & mask); };
-    auto get_bits = delayed_seq<size_t>(n, f);
+    // auto get_bits = delayed_seq<size_t>(n, f);
+    auto get_bits = delayed_tabulate<size_t>(n, f);
 
     // divide into buckets
     std::tie(offsets, one_bucket) = count_sort<assignment_tag>(In,

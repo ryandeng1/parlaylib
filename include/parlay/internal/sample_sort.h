@@ -153,7 +153,8 @@ void sample_sort_inplace_(slice<InIterator, InIterator> In,
     quicksort(sample_set.begin(), sample_set_size, less);
 
     // Pivots returns by reference to avoid making copies
-    auto pivots = delayed_seq<const value_type&>(num_buckets - 1, [&](size_t i) -> const value_type& {
+    // auto pivots = delayed_seq<const value_type&>(num_buckets - 1, [&](size_t i) -> const value_type& {
+    auto pivots = delayed_tabulate<const value_type&>(num_buckets - 1, [&](size_t i) -> const value_type& {
       assert(stride * i < sample_set_size);
       return sample_set[stride * i];
     });
